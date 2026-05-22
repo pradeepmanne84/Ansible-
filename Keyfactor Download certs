@@ -1,0 +1,112 @@
+---
+- name: Renew and Download Keyfactor Certificate
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    keyfactor_url: "https://keyfactor.company.com"
+
+    username: "svc_keyfactor"
+    password: "YourPassword"
+
+    cert_common_name: "switch01.company.com"
+
+    download_password: "PFXPassword123!"
+
+    output_dir: "/tmp/keyfactor_certs"
+
+  tasks:
+
+    - name: Create output directory
+      file:
+        path: "{{ output_dir }}"
+        state: directory
+
+    #################################################################
+    # STEP 1 - SEARCH CERTIFICATE
+    #################################################################
+
+    - name: Search certificate in Keyfactor
+      uri:
+        url: "{{ keyfactor_url }}/KeyfactorAPI/Certificates?pq.queryString=CN={{ cert_common_name }}"
+        method: GET
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        return_content: yes
+        headers:
+          Content-Type: "application/json"
+      register: cert_search
+
+    - name: Show certificate search result
+      debug:
+        var: cert_search.json
+
+    - name: Set certificate ID
+      set_fact:
+        cert_id: "{{ cert_search.json[0].Id }}"
+
+    #################################################################
+    # STEP 2 - RENEW CERTIFICATE
+    #################################################################
+
+    - name: Renew certificate
+      uri:
+        url: "{{ keyfactor_url }}/KeyfactorAPI/Enrollment/Renew"
+        method: POST
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          CertificateId: "{{ cert_id }}"
+      register: renew_result
+
+    - name: Show renewal result
+      debug:
+        var: renew_result.json
+
+    - name: Set renewed certificate ID
+      set_fact:
+        renewed_cert_id: "{{ renew_result.json.Id }}"
+
+    #################################################################
+    # STEP 3 - DOWNLOAD CERTIFICATE
+    #################################################################
+
+    - name: Download renewed certificate as PFX
+      uri:
+        url: "{{ keyfactor_url }}/KeyfactorAPI/Certificates/Download"
+        method: POST
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: yes
+        validate_certs: false
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          CertificateIDs:
+            - "{{ renewed_cert_id }}"
+          IncludeChain: true
+          Format: "PFX"
+          Password: "{{ download_password }}"
+        return_content: yes
+      register: cert_download
+
+    #################################################################
+    # STEP 4 - SAVE CERTIFICATE
+    #################################################################
+
+    - name: Save PFX certificate
+      copy:
+        content: "{{ cert_download.content | b64decode }}"
+        dest: "{{ output_dir }}/{{ cert_common_name }}.pfx"
+
+    - name: Success message
+      debug:
+        msg: "Certificate renewed and downloaded successfully"
